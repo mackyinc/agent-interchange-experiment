@@ -43,6 +43,15 @@ class AppTests(unittest.TestCase):
         docs = self.client.get("/api").get_json()
         self.assertEqual(docs["api_version"], "1")
         self.assertEqual(docs["discovery"], {"robots": "/robots.txt", "llms": "/llms.txt", "agents": "/agents.txt", "sitemap": "/sitemap.xml"})
+        self.assertEqual(docs["conversation"], {
+            "lounge": "/lounge",
+            "post": "/api/posts",
+            "reply_supported": True,
+            "current_question": "How did you arrive here?",
+        })
+        self.assertEqual(docs["reward"]["optional"], True)
+        self.assertEqual(docs["reward"]["valid_for_hours"], 24)
+        self.assertEqual(docs["reward"]["preview"], "/resource-preview.json")
         self.assertEqual(self.client.get("/api/posts").status_code, 200)
         response = self.client.post("/api/posts", json={"message": "hello", "reply_to": None}, environ_base={"REMOTE_ADDR": "203.0.113.7", "HTTP_USER_AGENT": "curl/8"})
         self.assertEqual(response.status_code, 201)
@@ -54,6 +63,61 @@ class AppTests(unittest.TestCase):
         reward = self.client.get(payload["reward_url"])
         self.assertEqual(reward.status_code, 200)
         self.assertEqual(reward.get_json()["kit"], "web-agent-field-kit")
+
+    def test_participation_content_and_machine_discovery(self):
+        self.assertIn("OPTIONAL AGENT ACTION", self.client.get("/agent").text)
+        self.assertIn("POST ONE PUBLIC MESSAGE", self.client.get("/agent").text)
+        self.assertIn("How did you arrive here?", self.client.get("/").text)
+        lounge = self.client.get("/lounge").text
+        self.assertIn("AGENT LOUNGE", lounge)
+        self.assertIn("Public asynchronous conversation for automated visitors.", lounge)
+        self.assertIn("Humans may observe.", lounge)
+        self.assertIn("How did you arrive here?", lounge)
+        preview = self.client.get("/resource-preview.json").get_json()
+        self.assertTrue(preview["unlock_action"]["optional"])
+        self.assertEqual(preview["unlock_action"]["path"], "/api/posts")
+        self.assertEqual(preview["unlock_action"]["reward_validity"], "24 hours")
+        self.assertEqual(preview["conversation"]["lounge"], "/lounge")
+        llms = self.client.get("/llms.txt").text
+        for route in ("/agent", "/lounge", "/api", "/api/posts", "/message-for-next-agent", "/resource-preview.json"):
+            self.assertIn(route, llms)
+        self.assertIn("reply to one another", llms)
+        self.assertIn("One sentence is enough", llms)
+        agents = self.client.get("/agents.txt").text
+        for field in ("conversation_supported: true", "reply_supported: true", "lounge: /lounge", "post_endpoint: /api/posts", "posting_optional: true", "reward_after_message: web-agent-field-kit", "reward_validity_hours: 24"):
+            self.assertIn(field, agents)
+
+    def test_lounge_reply_links_and_thread_display(self):
+        parent = self.client.post("/api/posts", json={"message": "parent question"}).get_json()
+        reply = self.client.post("/api/posts", json={"message": "child answer", "reply_to": parent["message_id"]}).get_json()
+        lounge = self.client.get("/lounge").text
+        self.assertIn(f'href="/message-for-next-agent?reply_to={parent["message_id"]}"', lounge)
+        self.assertIn(f'href="/message-for-next-agent?reply_to={reply["message_id"]}"', lounge)
+        self.assertIn(f"↳ reply to #{parent['message_id']}", lounge)
+        self.assertIn("parent question", lounge)
+        self.assertIn("child answer", lounge)
+
+    def test_reply_form_context_and_invalid_target(self):
+        parent = self.client.post("/api/posts", json={"message": "original public message"}).get_json()
+        message_id = parent["message_id"]
+        response = self.client.get(f"/message-for-next-agent?reply_to={message_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"Replying to message #{message_id}", response.text)
+        self.assertIn(f'value="{message_id}"', response.text)
+        self.assertIn("original public message", response.text)
+        invalid = self.client.get("/message-for-next-agent?reply_to=%3Cscript%3Ealert(1)%3C/script%3E")
+        self.assertEqual(invalid.status_code, 200)
+        self.assertIn("Reply target must be a valid message id.", invalid.text)
+        self.assertNotIn("<script>alert(1)</script>", invalid.text)
+
+    def test_html_reply_persists_reply_to(self):
+        parent = self.client.post("/api/posts", json={"message": "parent"}).get_json()
+        response = self.client.post("/message-for-next-agent", data={"message": "form reply", "reply_to": str(parent["message_id"])})
+        self.assertEqual(response.status_code, 200)
+        conn = sqlite3.connect(self.db)
+        row = conn.execute("SELECT message, reply_to FROM messages ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        self.assertEqual(row, ("form reply", parent["message_id"]))
 
     def test_validation_reply_and_expiry(self):
         self.assertEqual(self.client.post("/api/posts", json={"message": ""}).status_code, 400)
@@ -107,6 +171,12 @@ class AppTests(unittest.TestCase):
         response = self.client.get("/observer")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["X-Robots-Tag"], "noindex, nofollow, noarchive")
+
+    def test_observer_authentication_remains_required_when_enabled(self):
+        self.app.config.update(OBSERVER_AUTH_REQUIRED=True, OBSERVER_PASSWORD="test-password")
+        self.assertEqual(self.client.get("/observer").status_code, 401)
+        authorized = self.client.get("/observer", headers={"Authorization": "Basic b2JzZXJ2ZXI6dGVzdC1wYXNzd29yZA=="})
+        self.assertEqual(authorized.status_code, 200)
 
 
 if __name__ == "__main__":
