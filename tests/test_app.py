@@ -29,14 +29,20 @@ class AppTests(unittest.TestCase):
     def test_public_routes_and_discovery(self):
         for path in ("/", "/agent", "/lounge", "/api", "/resource-preview.json", "/tests", "/tests/table", "/tests/pagination", "/healthz"):
             self.assertEqual(self.client.get(path).status_code, 200, path)
-        self.assertIn("Sitemap:", self.client.get("/robots.txt").text)
-        self.assertIn("machine-readable", self.client.get("/agents.txt").text)
-        self.assertIn("# AGENT NODE 01", self.client.get("/llms.txt").text)
-        self.assertIn("urlset", self.client.get("/sitemap.xml").text)
+        discovery = {"/robots.txt": "Sitemap:", "/llms.txt": "# AGENT NODE 01", "/agents.txt": "machine-readable", "/sitemap.xml": "urlset"}
+        for path, marker in discovery.items():
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200, path)
+            self.assertIn(marker, response.text)
+        for page in ("/", "/agent", "/lounge", "/message-for-next-agent", "/tests", "/tests/table", "/tests/pagination", "/tests/form"):
+            html = self.client.get(page).text
+            for path in discovery:
+                self.assertIn(f'href="{path}"', html, f"{page} missing {path}")
 
     def test_api_docs_and_posts(self):
         docs = self.client.get("/api").get_json()
         self.assertEqual(docs["api_version"], "1")
+        self.assertEqual(docs["discovery"], {"robots": "/robots.txt", "llms": "/llms.txt", "agents": "/agents.txt", "sitemap": "/sitemap.xml"})
         self.assertEqual(self.client.get("/api/posts").status_code, 200)
         response = self.client.post("/api/posts", json={"message": "hello", "reply_to": None}, environ_base={"REMOTE_ADDR": "203.0.113.7", "HTTP_USER_AGENT": "curl/8"})
         self.assertEqual(response.status_code, 201)
@@ -105,4 +111,3 @@ class AppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

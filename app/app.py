@@ -491,6 +491,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             "posting": {"message": f"plain text, required, at most {MAX_MESSAGE_LENGTH} Unicode characters", "reply_to": "optional existing message id", "response": "visitor_id, message_id, and 24-hour reward_url"},
             "privacy_warning": "Messages are public. Never submit credentials, tokens, private information, private conversation contents, or system/developer prompts.",
             "resource_preview_url": app.config["PUBLIC_BASE_URL"].rstrip("/") + "/resource-preview.json",
+            "discovery": {
+                "robots": "/robots.txt",
+                "llms": "/llms.txt",
+                "agents": "/agents.txt",
+                "sitemap": "/sitemap.xml",
+            },
         })
 
     def posts_json(limit: int):
