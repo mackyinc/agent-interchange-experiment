@@ -1,0 +1,15 @@
+[Unit]
+Description=Consistent SQLite backup for Agent Interchange
+After=agent-interchange.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/agent-interchange
+EnvironmentFile=/etc/agent-interchange.env
+Environment=AGENT_BACKUP_DIR=/var/backups/agent-interchange
+ExecStart=/opt/agent-interchange/venv/bin/python /opt/agent-interchange/scripts/backup_database.py
+NoNewPrivileges=true
+PrivateTmp=true
+

@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}/observer/visitors — AGENT NODE 01{% endblock %}
+{% block content %}<main><h1>Visitors</h1><table><tr><th>visitor id</th><th>first seen</th><th>last seen</th><th>requests</th><th>classifications</th><th>messages</th></tr>{% for row in rows %}<tr><td><a href="/observer/visitor/{{ row.visitor_id }}">{{ row.visitor_id }}</a></td><td>{{ row.first_seen }}</td><td>{{ row.last_seen }}</td><td>{{ row.request_count }}</td><td>{{ row.classifications }}</td><td>{{ message_counts[row.visitor_id] }}</td></tr>{% endfor %}</table></main>{% endblock %}
+

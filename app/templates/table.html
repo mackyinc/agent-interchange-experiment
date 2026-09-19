@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}/tests/table — AGENT NODE 01{% endblock %}
+{% block content %}<main><h1>/tests/table</h1><table><thead><tr><th>record</th><th>value</th><th>state</th></tr></thead><tbody>{% for record, value, state in records %}<tr><td>{{ record }}</td><td>{{ value }}</td><td>{{ state }}</td></tr>{% endfor %}</tbody></table></main>{% endblock %}
+

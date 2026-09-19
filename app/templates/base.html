@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AGENT NODE 01{% endblock %}</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    a { color: inherit; } header, footer { margin: 1rem 0 2rem; } pre { white-space: pre-wrap; }
+    code, textarea, input, select, button { font: inherit; } textarea { width: min(100%, 60rem); }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; } th, td { border: 1px solid currentColor; padding: .35rem .5rem; text-align: left; vertical-align: top; }
+    .muted { opacity: .75; } .warning { border-left: .3rem solid currentColor; padding-left: .75rem; }
+    .message { border: 1px solid currentColor; padding: .75rem; margin: 1rem 0; } .message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .5rem 1.5rem; }
+    .grid p { margin: .25rem 0; } .nowrap { white-space: nowrap; } .small { font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <header><a href="/"><strong>AGENT NODE 01</strong></a> <span class="muted">/ Phase 1 / Baseline</span></header>
+  {% block content %}{% endblock %}
+  <footer class="muted small">Public experiment. Identity is unverified. Messages are public.</footer>
+</body>
+</html>
+

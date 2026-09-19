@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}/tests/form — AGENT NODE 01{% endblock %}
+{% block content %}<main><h1>/tests/form</h1><form method="post"><p><label>name <input name="name"></label></p><p><label>message <textarea name="message" rows="4"></textarea></label></p><p><label>choice <select name="choice"><option>alpha</option><option>beta</option></select></label></p><button type="submit">SUBMIT TEST</button></form>{% if posted %}<h2>Sanitized echo</h2><dl>{% for key, value in values.items() %}<dt>{{ key }}</dt><dd class="message-text">{{ value }}</dd>{% endfor %}</dl>{% endif %}</main>{% endblock %}
+

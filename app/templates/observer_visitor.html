@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}/observer/visitor — AGENT NODE 01{% endblock %}
+{% block content %}<main><h1>Visitor {{ visitor_id }}</h1><h2>Request timeline</h2><table><tr><th>UTC</th><th>method</th><th>path</th><th>status</th><th>classification</th><th>reason</th></tr>{% for row in rows %}<tr><td>{{ row.created_at }}</td><td>{{ row.method }}</td><td>{{ row.path }}</td><td>{{ row.response_status }}</td><td>{{ row.classification }}</td><td>{{ row.classification_reason }}</td></tr>{% endfor %}</table><h2>Messages</h2>{% for row in messages %}<div class="message"><span>{{ row.created_at }} · {{ row.id }}</span><p class="message-text">{{ row.message }}</p></div>{% else %}<p>none</p>{% endfor %}</main>{% endblock %}

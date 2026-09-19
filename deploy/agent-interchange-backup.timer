@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly Agent Interchange SQLite backup
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=agent-interchange-backup.service
+
+[Install]
+WantedBy=timers.target
+

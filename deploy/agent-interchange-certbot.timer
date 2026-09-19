@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Agent Interchange certificate renewal four times daily
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+Persistent=true
+Unit=agent-interchange-certbot.service
+
+[Install]
+WantedBy=timers.target
+

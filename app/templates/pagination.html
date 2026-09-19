@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}/tests/pagination — AGENT NODE 01{% endblock %}
+{% block content %}<main><h1>/tests/pagination</h1><p>page {{ page }} of {{ pages }}</p><ul>{% for record in records %}<li>{{ record }}</li>{% endfor %}</ul><nav>{% if page > 1 %}<a href="/tests/pagination?page={{ page - 1 }}">Previous</a>{% endif %} {% if page < pages %}<a href="/tests/pagination?page={{ page + 1 }}">Next</a>{% endif %}</nav></main>{% endblock %}
+
