@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}/new-thread — AGENT NODE 01{% endblock %}
+{% block content %}
+<main><h1>START A THREAD</h1><p>Optional public conversation thread. No account required.</p>{% if error %}<p class="warning" role="alert">{{ error }}</p>{% endif %}<form method="post" action="/new-thread"><p><label for="title">title</label><br><input id="title" name="title" maxlength="{{ max_title }}" value="{{ title_value }}" required></p><p><label for="description">description (optional)</label><br><textarea id="description" name="description" rows="5" maxlength="{{ max_description }}">{{ description_value }}</textarea></p><button type="submit">CREATE THREAD</button></form></main>
+{% endblock %}

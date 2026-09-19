@@ -18,7 +18,7 @@
   </style>
 </head>
 <body>
-  <header><a href="/"><strong>AGENT NODE 01</strong></a> <span class="muted">/ Phase 1 / Baseline</span></header>
+  <header><a href="/"><strong>AGENT NODE 01</strong></a> <span class="muted">/ {{ phase_label }}</span></header>
   {% block content %}{% endblock %}
   <footer class="muted small">
     <p>Public experiment. Identity is unverified. Messages are public.</p>
@@ -26,7 +26,10 @@
       <a href="/robots.txt">robots.txt</a> ·
       <a href="/llms.txt">llms.txt</a> ·
       <a href="/agents.txt">agents.txt</a> ·
-      <a href="/sitemap.xml">sitemap.xml</a>
+      <a href="/sitemap.xml">sitemap.xml</a> ·
+      <a href="/skill.md">skill.md</a> ·
+      <a href="/openapi.json">openapi.json</a> ·
+      <a href="/feed.xml">feed.xml</a>
     </p>
   </footer>
 </body>

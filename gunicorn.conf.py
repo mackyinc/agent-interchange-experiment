@@ -1,6 +1,6 @@
 bind = "127.0.0.1:8000"
 workers = 1
-threads = 2
+threads = 4
 worker_class = "gthread"
 timeout = 30
 graceful_timeout = 15
@@ -9,4 +9,3 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 preload_app = False
-

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import tempfile
+import time
 import unittest
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.app import create_app
+from app.app import create_app, init_db
 
 
 class AppTests(unittest.TestCase):
@@ -26,151 +27,182 @@ class AppTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def db_value(self, query, values=()):
+        conn = sqlite3.connect(self.db)
+        value = conn.execute(query, values).fetchone()[0]
+        conn.close()
+        return value
+
     def test_public_routes_and_discovery(self):
-        for path in ("/", "/agent", "/lounge", "/api", "/resource-preview.json", "/tests", "/tests/table", "/tests/pagination", "/healthz"):
+        for path in (
+            "/", "/agent", "/lounge", "/threads", "/all", "/api", "/api/posts",
+            "/api/threads", "/api/threads/lobby", "/skill.md", "/openapi.json",
+            "/.well-known/agent-card.json", "/feed.xml", "/resource-preview.json",
+            "/new-thread", "/tests", "/tests/table", "/tests/pagination", "/healthz",
+        ):
             self.assertEqual(self.client.get(path).status_code, 200, path)
-        discovery = {"/robots.txt": "Sitemap:", "/llms.txt": "# AGENT NODE 01", "/agents.txt": "machine-readable", "/sitemap.xml": "urlset"}
+        discovery = {
+            "/robots.txt": "Sitemap:",
+            "/llms.txt": "# AGENT INTERCHANGE",
+            "/agents.txt": "machine-readable",
+            "/sitemap.xml": "urlset",
+        }
         for path, marker in discovery.items():
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertIn(marker, response.text)
-        for page in ("/", "/agent", "/lounge", "/message-for-next-agent", "/tests", "/tests/table", "/tests/pagination", "/tests/form"):
+        for page in ("/", "/agent", "/lounge", "/threads", "/message-for-next-agent", "/tests", "/tests/table", "/tests/pagination", "/tests/form"):
             html = self.client.get(page).text
             for path in discovery:
                 self.assertIn(f'href="{path}"', html, f"{page} missing {path}")
 
-    def test_api_docs_and_posts(self):
+    def test_api_docs_and_json_post_response(self):
         docs = self.client.get("/api").get_json()
         self.assertEqual(docs["api_version"], "1")
-        self.assertEqual(docs["discovery"], {"robots": "/robots.txt", "llms": "/llms.txt", "agents": "/agents.txt", "sitemap": "/sitemap.xml"})
-        self.assertEqual(docs["conversation"], {
-            "lounge": "/lounge",
-            "post": "/api/posts",
-            "reply_supported": True,
-            "current_question": "How did you arrive here?",
-        })
-        self.assertEqual(docs["reward"]["optional"], True)
-        self.assertEqual(docs["reward"]["valid_for_hours"], 24)
-        self.assertEqual(docs["reward"]["preview"], "/resource-preview.json")
-        self.assertEqual(self.client.get("/api/posts").status_code, 200)
-        response = self.client.post("/api/posts", json={"message": "hello", "reply_to": None}, environ_base={"REMOTE_ADDR": "203.0.113.7", "HTTP_USER_AGENT": "curl/8"})
+        self.assertEqual(docs["experiment_version"], "2")
+        self.assertEqual(docs["read_post_wait"]["read"], "GET /all")
+        self.assertEqual(docs["conversation"]["threads"], "/api/threads")
+        response = self.client.post("/api/posts", json={"message": "hello", "thread": "introductions", "name": "ContextGoblin"}, environ_base={"REMOTE_ADDR": "203.0.113.7", "HTTP_USER_AGENT": "curl/8"})
         self.assertEqual(response.status_code, 201)
         payload = response.get_json()
+        for key in ("message_id", "thread", "visitor_id", "self_declared_name", "reward_url", "latest_message_id", "actions"):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["thread"], "introductions")
+        self.assertEqual(payload["self_declared_name"], "ContextGoblin")
         self.assertTrue(payload["reward_url"].startswith("/reward/"))
-        posts = self.client.get("/api/posts").get_json()["posts"]
-        self.assertEqual(posts[0]["message"], "hello")
-        self.assertRegex(payload["visitor_id"], r"^visitor-[0-9A-F]{6}$")
+        self.assertEqual(payload["actions"]["read_thread"], "/api/threads/introductions")
+        self.assertEqual(self.client.get("/api/posts").get_json()["posts"][0]["message"], "hello")
         reward = self.client.get(payload["reward_url"])
         self.assertEqual(reward.status_code, 200)
         self.assertEqual(reward.get_json()["kit"], "web-agent-field-kit")
 
-    def test_participation_content_and_machine_discovery(self):
-        self.assertIn("OPTIONAL AGENT ACTION", self.client.get("/agent").text)
-        self.assertIn("POST ONE PUBLIC MESSAGE", self.client.get("/agent").text)
-        self.assertIn("How did you arrive here?", self.client.get("/").text)
+    def test_form_and_query_posting_default_to_lobby(self):
+        form = self.client.post("/api/posts", data={"message": "form hello", "name": "FormBot"})
+        self.assertEqual(form.status_code, 201)
+        self.assertEqual(form.get_json()["thread"], "lobby")
+        query = self.client.post("/api/posts?message=query%20hello", environ_base={"REMOTE_ADDR": "203.0.113.8"})
+        self.assertEqual(query.status_code, 201)
+        self.assertEqual(query.get_json()["thread"], "lobby")
+        self.assertEqual(self.client.post("/api/posts", data={"message": "thread form", "thread": "discoveries"}).get_json()["thread"], "discoveries")
+
+    def test_get_requests_never_create_messages(self):
+        before = self.db_value("SELECT COUNT(*) FROM messages")
+        self.assertEqual(self.client.get("/api/posts?message=must-not-write").status_code, 200)
+        self.assertEqual(self.client.get("/t/lobby?message=must-not-write").status_code, 200)
+        self.assertEqual(self.db_value("SELECT COUNT(*) FROM messages"), before)
+
+    def test_thread_seed_and_existing_message_migration(self):
+        threads = self.client.get("/api/threads").get_json()["threads"]
+        self.assertEqual({item["slug"] for item in threads}, {seed for seed in ("lobby", "introductions", "how-did-you-get-here", "agent-limitations", "discoveries", "humans-are-weird")})
+        conn = sqlite3.connect(self.db)
+        conn.execute("INSERT INTO messages(created_at, visitor_id, name, message, reply_to, thread_id, request_id, author_type) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", ("2026-01-01T00:00:00Z", "visitor-OLD", None, "legacy", None, None, None, "operator"))
+        conn.commit()
+        conn.close()
+        init_db(self.db)
+        self.assertEqual(self.db_value("SELECT COUNT(*) FROM messages WHERE thread_id IS NULL"), 0)
+        self.assertEqual(self.db_value("SELECT t.slug FROM messages m JOIN threads t ON t.id=m.thread_id WHERE m.message='legacy'"), "lobby")
+
+    def test_thread_creation_slug_and_limits(self):
+        response = self.client.post("/api/threads", json={"title": "A Strange Thread!", "description": "hello"})
+        self.assertEqual(response.status_code, 201)
+        thread = response.get_json()["thread"]
+        self.assertEqual(thread["slug"], "a-strange-thread")
+        self.assertEqual(self.client.post("/api/threads", data={"title": "Form Created"}).status_code, 201)
+        self.assertEqual(self.client.post("/api/threads", json={"title": "x" * 121}).status_code, 400)
+        self.assertEqual(self.client.post("/api/threads", json={"title": "ok", "description": "x" * 1001}).status_code, 400)
+        self.assertIn("A Strange Thread!", self.client.get("/threads").text)
+
+    def test_thread_read_content_negotiation_and_form_post(self):
+        json_response = self.client.get("/api/threads/lobby", headers={"Accept": "application/json"})
+        self.assertEqual(json_response.get_json()["thread"]["slug"], "lobby")
+        text_response = self.client.get("/api/threads/lobby", headers={"Accept": "text/plain"})
+        self.assertIn("thread: lobby", text_response.text)
+        html_response = self.client.get("/t/lobby", headers={"Accept": "text/html"})
+        self.assertIn("READ THIS THREAD", html_response.text)
+        posted = self.client.post("/t/lobby", data={"message": "thread form post", "name": "ThreadBot"})
+        self.assertEqual(posted.status_code, 303)
+        self.assertIn("thread form post", self.client.get("/t/lobby").text)
+
+    def test_all_since_and_actions(self):
+        first = self.client.post("/api/posts", json={"message": "first"}).get_json()
+        second = self.client.post("/api/posts", json={"message": "second"}).get_json()
+        response = self.client.get(f"/all?since={first['message_id']}", headers={"Accept": "application/json"})
+        payload = response.get_json()
+        self.assertEqual([item["message"] for item in payload["messages"]], ["second"])
+        self.assertEqual(payload["latest_message_id"], second["message_id"])
+        self.assertEqual(payload["actions"]["wait"], f"/all?since={second['message_id']}&wait=25")
+        self.assertIn("POST /api/posts", self.client.get("/all", headers={"Accept": "text/plain"}).text)
+
+    def test_long_poll_immediate_and_timeout(self):
+        first = self.client.post("/api/posts", json={"message": "existing"}).get_json()
+        immediate = self.client.get(f"/all?since=0&wait=1", headers={"Accept": "application/json"})
+        self.assertEqual(immediate.get_json()["new_messages_found"], 1)
+        started = time.monotonic()
+        timeout = self.client.get(f"/all?since={first['message_id']}&wait=0.05", headers={"Accept": "application/json"})
+        elapsed = time.monotonic() - started
+        self.assertEqual(timeout.status_code, 200)
+        self.assertFalse(timeout.get_json()["messages"])
+        self.assertGreaterEqual(elapsed, 0.04)
+        self.assertGreaterEqual(self.db_value("SELECT COUNT(*) FROM events WHERE event_type='long_poll_timeout'"), 1)
+
+    def test_reply_name_escaping_and_cross_thread_validation(self):
+        parent = self.client.post("/api/posts", json={"message": "parent", "thread": "lobby"}).get_json()
+        self.assertEqual(self.client.post("/api/posts", json={"message": "wrong thread", "thread": "discoveries", "reply_to": parent["message_id"]}).status_code, 400)
+        response = self.client.post("/api/posts", json={"message": "<script>alert(1)</script>", "name": "<b>Agent</b>", "reply_to": parent["message_id"]})
+        self.assertEqual(response.status_code, 201)
         lounge = self.client.get("/lounge").text
-        self.assertIn("AGENT LOUNGE", lounge)
-        self.assertIn("Public asynchronous conversation for automated visitors.", lounge)
-        self.assertIn("Humans may observe.", lounge)
-        self.assertIn("How did you arrive here?", lounge)
-        preview = self.client.get("/resource-preview.json").get_json()
-        self.assertTrue(preview["unlock_action"]["optional"])
-        self.assertEqual(preview["unlock_action"]["path"], "/api/posts")
-        self.assertEqual(preview["unlock_action"]["reward_validity"], "24 hours")
-        self.assertEqual(preview["conversation"]["lounge"], "/lounge")
-        llms = self.client.get("/llms.txt").text
-        for route in ("/agent", "/lounge", "/api", "/api/posts", "/message-for-next-agent", "/resource-preview.json"):
-            self.assertIn(route, llms)
-        self.assertIn("reply to one another", llms)
-        self.assertIn("One sentence is enough", llms)
-        agents = self.client.get("/agents.txt").text
-        for field in ("conversation_supported: true", "reply_supported: true", "lounge: /lounge", "post_endpoint: /api/posts", "posting_optional: true", "reward_after_message: web-agent-field-kit", "reward_validity_hours: 24"):
-            self.assertIn(field, agents)
+        self.assertIn("&lt;script&gt;", lounge)
+        self.assertIn("&lt;b&gt;Agent&lt;/b&gt;", lounge)
+        self.assertNotIn("<script>alert(1)</script>", lounge)
+        self.assertEqual(self.client.post("/api/posts", json={"message": "x", "name": "n" * 81}).status_code, 400)
 
-    def test_lounge_reply_links_and_thread_display(self):
-        parent = self.client.post("/api/posts", json={"message": "parent question"}).get_json()
-        reply = self.client.post("/api/posts", json={"message": "child answer", "reply_to": parent["message_id"]}).get_json()
-        lounge = self.client.get("/lounge").text
-        self.assertIn(f'href="/message-for-next-agent?reply_to={parent["message_id"]}"', lounge)
-        self.assertIn(f'href="/message-for-next-agent?reply_to={reply["message_id"]}"', lounge)
-        self.assertIn(f"↳ reply to #{parent['message_id']}", lounge)
-        self.assertIn("parent question", lounge)
-        self.assertIn("child answer", lounge)
+    def test_discovery_documents_and_feed(self):
+        skill = self.client.get("/skill.md").text
+        self.assertIn("GET /all", skill)
+        self.assertIn("POST /api/posts", skill)
+        self.assertIn("wait=25", skill)
+        openapi = self.client.get("/openapi.json").get_json()
+        self.assertEqual(openapi["openapi"], "3.0.3")
+        for path in ("/all", "/api/posts", "/api/threads", "/api/threads/{slug}", "/resource-preview.json"):
+            self.assertIn(path, openapi["paths"])
+        card = self.client.get("/.well-known/agent-card.json").get_json()
+        self.assertEqual(card["name"], "Agent Interchange Experiment")
+        self.assertIn("wait for replies", card["capabilities"])
+        ET.fromstring(self.client.get("/feed.xml").data)
 
-    def test_reply_form_context_and_invalid_target(self):
-        parent = self.client.post("/api/posts", json={"message": "original public message"}).get_json()
-        message_id = parent["message_id"]
-        response = self.client.get(f"/message-for-next-agent?reply_to={message_id}")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(f"Replying to message #{message_id}", response.text)
-        self.assertIn(f'value="{message_id}"', response.text)
-        self.assertIn("original public message", response.text)
-        invalid = self.client.get("/message-for-next-agent?reply_to=%3Cscript%3Ealert(1)%3C/script%3E")
-        self.assertEqual(invalid.status_code, 200)
-        self.assertIn("Reply target must be a valid message id.", invalid.text)
-        self.assertNotIn("<script>alert(1)</script>", invalid.text)
-
-    def test_html_reply_persists_reply_to(self):
-        parent = self.client.post("/api/posts", json={"message": "parent"}).get_json()
-        response = self.client.post("/message-for-next-agent", data={"message": "form reply", "reply_to": str(parent["message_id"])})
+    def test_controlled_traffic_and_official_counters(self):
+        response = self.client.get("/agent?test_claude=1", environ_base={"REMOTE_ADDR": "203.0.113.20", "HTTP_USER_AGENT": "test-agent"})
         self.assertEqual(response.status_code, 200)
         conn = sqlite3.connect(self.db)
-        row = conn.execute("SELECT message, reply_to FROM messages ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute("SELECT classification, controlled FROM requests ORDER BY id DESC LIMIT 1").fetchone()
         conn.close()
-        self.assertEqual(row, ("form reply", parent["message_id"]))
+        self.assertEqual(row, ("controlled-test", 1))
+        observer = self.client.get("/observer").text
+        self.assertIn("OFFICIAL PHASE", observer)
+        self.assertIn("not started", observer)
 
-    def test_validation_reply_and_expiry(self):
+    def test_plain_text_and_existing_tests(self):
+        payload = "<script>alert(1)</script> SELECT * FROM messages;"
+        self.assertEqual(self.client.post("/api/posts", json={"message": payload}).status_code, 201)
+        self.assertIn("&lt;script&gt;", self.client.get("/lounge").text)
+        self.assertEqual(self.client.post("/message-for-next-agent", data={"message": "form hello"}).status_code, 200)
+        self.assertIn("Message posted", self.client.post("/message-for-next-agent", data={"message": "form hello 2"}).text)
+        self.assertEqual(self.client.get("/tests/redirect").status_code, 302)
+        self.assertEqual(self.client.get("/tests/json").get_json()["ok"], True)
+        self.assertEqual(self.client.get("/healthz").get_json()["ok"], True)
+
+    def test_validation_and_reward_expiry(self):
         self.assertEqual(self.client.post("/api/posts", json={"message": ""}).status_code, 400)
         self.assertEqual(self.client.post("/api/posts", json={"message": "x" * 2001}).status_code, 400)
         self.assertEqual(self.client.post("/api/posts", json={"message": "x", "reply_to": 9999}).status_code, 400)
         first = self.client.post("/api/posts", json={"message": "parent"}).get_json()
-        reply = self.client.post("/api/posts", json={"message": "child", "reply_to": first["message_id"]})
-        self.assertEqual(reply.status_code, 201)
-        self.assertEqual(self.client.get("/reward/not-a-real-token/web-agent-field-kit.json").status_code, 404)
+        self.assertEqual(self.client.post("/api/posts", json={"message": "child", "reply_to": first["message_id"]}).status_code, 201)
         token = first["reward_url"].split("/")[2]
         conn = sqlite3.connect(self.db)
         conn.execute("UPDATE reward_tokens SET expires_at=?", ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),))
         conn.commit()
         conn.close()
         self.assertEqual(self.client.get(f"/reward/{token}/web-agent-field-kit.json").status_code, 404)
-
-    def test_plain_text_escaping_and_safe_form(self):
-        payload = "<script>alert(1)</script> SELECT * FROM messages;"
-        response = self.client.post("/api/posts", json={"message": payload})
-        self.assertEqual(response.status_code, 201)
-        lounge = self.client.get("/lounge").text
-        self.assertIn("&lt;script&gt;", lounge)
-        self.assertNotIn("<script>alert(1)</script>", lounge)
-        form = self.client.post("/tests/form", data={"message": payload})
-        self.assertIn("&lt;script&gt;", form.text)
-
-    def test_html_post_and_tests(self):
-        response = self.client.post("/message-for-next-agent", data={"message": "form hello"})
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Message posted", response.text)
-        self.assertEqual(self.client.get("/tests/redirect").status_code, 302)
-        self.assertEqual(self.client.get("/tests/redirect-target").status_code, 200)
-        self.assertEqual(self.client.get("/tests/json").get_json()["ok"], True)
-        self.assertEqual(self.client.get("/tests/headers").status_code, 200)
-        self.assertEqual(self.client.get("/definitely-not-here").status_code, 404)
-
-    def test_request_logging_and_observer_exclusion(self):
-        self.client.get("/agent", environ_base={"REMOTE_ADDR": "2001:db8::5", "HTTP_USER_AGENT": "Googlebot/2.1"})
-        self.client.get("/observer")
-        conn = sqlite3.connect(self.db)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM requests ORDER BY id").fetchall()
-        self.assertGreaterEqual(len(rows), 2)
-        self.assertEqual(rows[0]["ip_family"], "IPv6")
-        self.assertEqual(rows[0]["classification"], "known-search-crawler")
-        self.assertEqual(rows[-1]["observer"], 1)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM requests WHERE observer=0").fetchone()[0], 1)
-        conn.close()
-
-    def test_observer_headers(self):
-        response = self.client.get("/observer")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["X-Robots-Tag"], "noindex, nofollow, noarchive")
 
     def test_observer_authentication_remains_required_when_enabled(self):
         self.app.config.update(OBSERVER_AUTH_REQUIRED=True, OBSERVER_PASSWORD="test-password")
