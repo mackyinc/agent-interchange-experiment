@@ -57,7 +57,7 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
 .m .t { font-size: 14px; margin-top: 6px; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .chips button { padding: 8px 14px; min-height: 40px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font-size: 14px; cursor: pointer; }
-.chips button.on { background: var(--acc); color: var(--acc-ink); border-color: var(--acc); }
+.chips button[aria-pressed="true"], .chips button.on { background: var(--acc); color: var(--acc-ink); border-color: var(--acc); }
 #chart { width: 100%; height: 150px; background: #0b1118; border: 1px solid var(--line); border-radius: 10px; display: block; }
 .leg { font-size: 13px; color: var(--mut); }
 .leg i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 4px 0 10px; vertical-align: middle; }
@@ -65,6 +65,9 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
 .sum h3 { font-size: 19px; margin: 0 0 8px; }
 .sum ul { margin: 4px 0 12px; }
 .sum .focus { border-left: 4px solid var(--acc); padding-left: 10px; margin-top: 12px; font-weight: 600; }
+#shot { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 20; overflow: auto; padding: 16px; display: flex; justify-content: center; align-items: flex-start; }
+.shotbox { max-width: 560px; width: 100%; }
+#shotImg { width: 100%; border-radius: 10px; display: block; margin-bottom: 12px; }
 .snapitem { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .snapitem:last-child { border: 0; }
 .snapitem canvas { width: 38%; max-width: 180px; border-radius: 8px; background: #000; flex: none; }
@@ -152,6 +155,10 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
           <button type="button" id="setContact">Set contact to this frame</button>
         </div>
         <p class="mut">The yellow line follows your hands.</p>
+        <div class="chips">
+          <button type="button" class="angbtn" aria-pressed="false">Show angles</button>
+          <button type="button" id="shotBtn">Save screenshot</button>
+        </div>
 
         <div id="summary" class="card sum"></div>
 
@@ -186,9 +193,23 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
       <div><button type="button" class="btn sec" id="liveFlip">Flip camera</button></div>
     </div>
     <div id="liveStatus" class="mut" role="status" aria-live="polite" style="margin-top:8px">Camera is off. Set the phone down, step back until your whole body is in view, then press Start.</div>
-    <div class="grid" id="liveMetrics" style="margin-top:10px"></div>
+    <div class="chips" style="margin-top:10px">
+      <button type="button" class="angbtn" aria-pressed="false">Show angles on pictures</button>
+      <button type="button" id="liveShot">Save screenshot</button>
+    </div>
     <div id="snap" class="card sum hide"><h3>Contact snapshots</h3><p class="mut">Each time the ping is heard, the picture and posture at that moment show up here. Live tracking runs a few times a second, so this can be off by a fraction of a second.</p><div id="snapList"></div></div>
-    <p class="mut">Use this to check your stance before you swing. To measure the swing itself, record it and use <b>Check a swing</b>.</p>
+    <p class="mut">Use this to check your stance before you swing. Tap <b>Save screenshot</b> to keep a picture with the skeleton on it, and turn on <b>Show angles</b> to mark the angles too. To measure the swing itself, record it and use <b>Check a swing</b>.</p>
+  </div>
+</div>
+
+<div id="shot" class="hide" role="dialog" aria-label="Screenshot">
+  <div class="shotbox">
+    <img id="shotImg" alt="Swing screenshot">
+    <div class="row">
+      <div><button type="button" class="btn" id="shotShare">Save or share</button></div>
+      <div><button type="button" class="btn sec" id="shotClose">Close</button></div>
+    </div>
+    <p class="mut">Or press and hold the picture to save it.</p>
   </div>
 </div>
 
@@ -507,6 +528,7 @@ function plainPosture(p) {
   var MAX_SEC = 10;
   var S = { pose: null, mode: '', last: null, busy: false, url: null, frames: null, an: null, fps: 30, W: 0, H: 0, idx: 0, timer: 0, sp: 0.5,
             live: false, facing: 'environment', stream: null, loopId: 0,
+            angles: false, liveLm: null, shotCanvas: null,
             ring: [], ringN: 0, pool: [], det: null, actx: null, proc: null, ping: null, manualT: null, prev: null };
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -539,7 +561,7 @@ function plainPosture(p) {
   }
 
   /* ---------- drawing ---------- */
-  function drawPose(cv, lm, W, H, trail) {
+  function drawPose(cv, lm, W, H, trail, angBat) {
     var g = cv.getContext('2d');
     g.clearRect(0, 0, cv.width, cv.height);
     if (trail && trail.length > 1) {
@@ -560,7 +582,144 @@ function plainPosture(p) {
       var p = lm[i]; if (!p || p.visibility < 0.4) return;
       g.beginPath(); g.arc(p.x * W, p.y * H, lw * 1.6, 0, 7); g.fill();
     });
+    if (angBat) drawAngles(g, lm, W, H, angBat);
   }
+
+  // Marks the main body angles on top of the skeleton: knees, elbows, lean, shoulder tilt and hip tilt.
+  function drawAngles(g, lm, W, H, bat) {
+    var fs = Math.max(13, Math.round(W / 38)), lw = Math.max(2, W / 360);
+    var GREEN = '#4ade80', AMBER = '#fbbf24', CYAN = '#7dd3fc';
+    var placed = [];
+    function ok() { for (var i = 0; i < arguments.length; i++) { var p = lm[arguments[i]]; if (!p || p.visibility < 0.4) return false; } return true; }
+    function P(k) { return [lm[k].x * W, lm[k].y * H]; }
+    function pill(text, x, y, col, right) {
+      g.font = '600 ' + fs + 'px system-ui, sans-serif'; g.textBaseline = 'middle'; g.setLineDash([]);
+      var w = g.measureText(text).width + fs * 0.9, h = fs * 1.6;
+      if (right) x -= w;
+      x = Math.max(4, Math.min(W - w - 4, x));
+      var tries = [0, 1, -1, 2, -2, 3, -3], k, j, y0 = y, found = false;
+      for (k = 0; k < tries.length && !found; k++) {
+        var yy = Math.max(h / 2 + 2, Math.min(H - h / 2 - 2, y0 + tries[k] * h * 1.05)), clash = false;
+        for (j = 0; j < placed.length; j++) {
+          var r = placed[j];
+          if (x < r.x + r.w && x + w > r.x && yy - h / 2 < r.y + r.h && yy + h / 2 > r.y) { clash = true; break; }
+        }
+        if (!clash) { y = yy; found = true; }
+      }
+      if (!found) y = Math.max(h / 2 + 2, Math.min(H - h / 2 - 2, y0));
+      placed.push({ x: x, y: y - h / 2, w: w, h: h });
+      g.fillStyle = 'rgba(11,17,24,.85)'; g.strokeStyle = col; g.lineWidth = lw;
+      g.beginPath(); if (g.roundRect) g.roundRect(x, y - h / 2, w, h, h / 2); else g.rect(x, y - h / 2, w, h);
+      g.fill(); g.stroke();
+      g.fillStyle = '#fff'; g.fillText(text, x + fs * 0.45, y + 1);
+    }
+    function joint(a, b, c, label, colFn) {
+      if (!ok(a, b, c)) return;
+      var A = P(a), B = P(b), C = P(c), r = W / 22;
+      var deg = Math.round(angleAt(A, B, C)), col = colFn(deg);
+      var a1 = Math.atan2(A[1] - B[1], A[0] - B[0]), a2 = Math.atan2(C[1] - B[1], C[0] - B[0]);
+      var d = a2 - a1; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+      g.setLineDash([]); g.strokeStyle = col; g.lineWidth = lw * 1.8;
+      g.beginPath(); g.arc(B[0], B[1], r, a1, a1 + d, d < 0); g.stroke();
+      var mid = a1 + d / 2, cx = Math.cos(mid), cy = Math.sin(mid);
+      pill(label + ' ' + deg + '\u00B0', B[0] + cx * (r + fs * 0.5), B[1] + cy * (r + fs * 0.9), col, cx < 0);
+    }
+    function tilt(a, b) {
+      var t = Math.atan2(lm[b].y * H - lm[a].y * H, lm[b].x * W - lm[a].x * W) * 180 / Math.PI;
+      if (t > 90) t -= 180; else if (t < -90) t += 180;
+      return t;
+    }
+    function ext(a, b, label, dy) {
+      if (!ok(a, b)) return;
+      var A = P(a), B = P(b), ux = B[0] - A[0], uy = B[1] - A[1];
+      g.setLineDash([10, 8]); g.strokeStyle = CYAN; g.lineWidth = lw * 1.4;
+      g.beginPath(); g.moveTo(A[0] - ux * 0.25, A[1] - uy * 0.25); g.lineTo(B[0] + ux * 0.25, B[1] + uy * 0.25); g.stroke();
+      pill(label + ' ' + Math.abs(Math.round(tilt(a, b))) + '\u00B0', (A[0] + B[0]) / 2 - fs * 3, (A[1] + B[1]) / 2 + dy, CYAN, false);
+    }
+    var front = bat === 'R' ? [23, 25, 27] : [24, 26, 28], back = bat === 'R' ? [24, 26, 28] : [23, 25, 27];
+    joint(front[0], front[1], front[2], 'Front knee', function (d) { return d >= 150 ? GREEN : AMBER; });
+    joint(back[0], back[1], back[2], 'Back knee', function () { return CYAN; });
+    joint(11, 13, 15, 'Elbow', function () { return CYAN; });
+    joint(12, 14, 16, 'Elbow', function () { return CYAN; });
+    ext(11, 12, 'Shoulders', -fs * 1.9);
+    ext(23, 24, 'Hips', fs * 1.9);
+    if (ok(11, 12, 23, 24)) {
+      var S1 = P(11), S2 = P(12), H1 = P(23), H2 = P(24);
+      var ms = [(S1[0] + S2[0]) / 2, (S1[1] + S2[1]) / 2], mh = [(H1[0] + H2[0]) / 2, (H1[1] + H2[1]) / 2];
+      var lean = Math.atan2(ms[0] - mh[0], mh[1] - ms[1]) * 180 / Math.PI, len = Math.hypot(ms[0] - mh[0], ms[1] - mh[1]) * 1.25;
+      var col = Math.abs(lean) <= 12 ? GREEN : AMBER;
+      g.setLineDash([8, 8]); g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = lw * 1.2;
+      g.beginPath(); g.moveTo(mh[0], mh[1]); g.lineTo(mh[0], mh[1] - len); g.stroke();
+      g.setLineDash([]); g.strokeStyle = col; g.lineWidth = lw * 2;
+      g.beginPath(); g.moveTo(mh[0], mh[1]); g.lineTo(ms[0], ms[1]); g.stroke();
+      pill('Lean ' + Math.abs(Math.round(lean)) + '\u00B0', ms[0] + fs * 0.8, ms[1] - fs * 2.6, col, false);
+    }
+    g.setLineDash([]);
+  }
+
+  function angArg(which) { return S.angles ? (which === 'L' ? $('#lbat').value : $('#bat').value) : null; }
+  function syncAngles() {
+    Array.prototype.forEach.call(document.querySelectorAll('.angbtn'), function (b) { b.setAttribute('aria-pressed', S.angles ? 'true' : 'false'); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.angbtn'), function (b) {
+    b.addEventListener('click', function () {
+      S.angles = !S.angles; LS.set('angles', S.angles); syncAngles();
+      if (S.an && S.frames && !$('#results').classList.contains('hide')) goto_(S.idx);
+    });
+  });
+
+  /* ---------- screenshots ---------- */
+  function caption(g, W, H, text) {
+    var fs = Math.max(12, Math.round(W / 46));
+    g.font = '600 ' + fs + 'px system-ui, sans-serif'; g.textBaseline = 'middle';
+    var w = g.measureText(text).width + fs, h = fs * 1.7;
+    g.fillStyle = 'rgba(11,17,24,.8)'; g.fillRect(0, H - h, w, h);
+    g.fillStyle = '#fff'; g.fillText(text, fs * 0.5, H - h / 2 + 1);
+  }
+  function openShot(cv) {
+    S.shotCanvas = cv;
+    $('#shotImg').src = cv.toDataURL('image/png');
+    $('#shot').classList.remove('hide');
+  }
+  $('#shotClose').addEventListener('click', function () { $('#shot').classList.add('hide'); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') $('#shot').classList.add('hide'); });
+  $('#shotShare').addEventListener('click', function () {
+    var cv = S.shotCanvas; if (!cv) return;
+    cv.toBlob(function (blob) {
+      if (!blob) return;
+      var name = 'swing-check-' + Date.now() + '.png', file = null;
+      try { file = new File([blob], name, { type: 'image/png' }); } catch (e) {}
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) { navigator.share({ files: [file], title: 'Swing Check' }).catch(function () {}); return; }
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    }, 'image/png');
+  });
+  async function shotResults() {
+    if (!S.an) return;
+    stopPlay();
+    var v = $('#vid');
+    if (v.seeking) { try { await once(v, 'seeked', 2500); } catch (e) {} }
+    var cv = document.createElement('canvas'); cv.width = S.W; cv.height = S.H;
+    var g = cv.getContext('2d'); g.drawImage(v, 0, 0, S.W, S.H);
+    var ov = document.createElement('canvas'); ov.width = S.W; ov.height = S.H;
+    var a = S.an, trail = a.hand.slice(Math.min(a.s, S.idx), S.idx + 1);
+    drawPose(ov, S.frames[S.idx].lm, S.W, S.H, S.idx > a.s ? trail : null, angArg('A'));
+    g.drawImage(ov, 0, 0);
+    caption(g, S.W, S.H, S.idx === a.c ? 'Swing Check - contact frame' : 'Swing Check - ' + S.frames[S.idx].t.toFixed(2) + ' s');
+    openShot(cv);
+  }
+  function shotLive() {
+    var v = $('#lv');
+    if (!S.live || !v.videoWidth) { liveMsg('Start the camera first, then tap Save screenshot.', true); return; }
+    var W = v.videoWidth, H = v.videoHeight, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var g = cv.getContext('2d'); g.drawImage(v, 0, 0, W, H);
+    var ov = document.createElement('canvas'); ov.width = W; ov.height = H;
+    drawPose(ov, S.liveLm, W, H, null, angArg('L'));
+    g.drawImage(ov, 0, 0);
+    caption(g, W, H, 'Swing Check - live');
+    openShot(cv);
+  }
+  $('#shotBtn').addEventListener('click', function () { shotResults(); });
+  $('#liveShot').addEventListener('click', shotLive);
 
   /* ---------- tabs ---------- */
   function setTab(which) {
@@ -726,7 +885,7 @@ function plainPosture(p) {
     S.idx = Math.max(0, Math.min(a.n - 1, i)); $('#scrub').value = String(S.idx);
     var v = $('#vid'); v.currentTime = S.frames[S.idx].t;
     var trail = a.hand.slice(Math.min(a.s, S.idx), S.idx + 1);
-    drawPose($('#ov'), S.frames[S.idx].lm, S.W, S.H, S.idx > a.s ? trail : null);
+    drawPose($('#ov'), S.frames[S.idx].lm, S.W, S.H, S.idx > a.s ? trail : null, angArg('A'));
   }
   function stopPlay() { if (S.timer) { clearInterval(S.timer); S.timer = 0; } $('#playBtn').textContent = 'Play'; }
   $('#scrub').addEventListener('input', function (e) { stopPlay(); goto_(parseInt(e.target.value, 10)); });
@@ -765,26 +924,8 @@ function plainPosture(p) {
 
   /* ---------- live view ---------- */
   function liveMsg(t, err) { var b = $('#liveStatus'); b.textContent = t; b.style.color = err ? 'var(--warn)' : ''; }
-  function renderLive(p) {
-    var m = $('#liveMetrics'); m.innerHTML = '';
-    if (p.knee === undefined && p.lean === undefined) { return; }
-    if (p.knee !== undefined) {
-      var kk = p.knee >= 135 && p.knee <= 170 ? 'good' : 'ok';
-      m.appendChild(card(kk, Math.round(p.knee) + ' deg', 'Front knee bend', 'A soft bend, around 140 to 165 degrees, is a ready stance.'));
-    }
-    if (p.lean !== undefined) {
-      var lk = Math.abs(p.lean) <= 10 ? 'good' : 'ok';
-      m.appendChild(card(lk, Math.abs(Math.round(p.lean)) + ' deg ' + (p.lean > 0 ? 'right' : 'left'), 'Upper body lean', 'Close to 0 means the upper body is upright over the hips.'));
-      var tk = Math.abs(p.tilt) <= 8 ? 'good' : 'ok';
-      m.appendChild(card(tk, Math.abs(Math.round(p.tilt)) + ' deg', 'Shoulder tilt', 'How far the shoulder line is off level. A small tilt is normal in a stance.'));
-    }
-    if (p.stance !== undefined) {
-      var sk = p.stance >= 1.2 && p.stance <= 2.0 ? 'good' : 'ok';
-      m.appendChild(card(sk, p.stance.toFixed(1) + 'x', 'Stance width', 'Feet apart compared to shoulder width. About 1.2x to 2x is common. Best seen facing the camera.'));
-    }
-  }
   async function liveLoop(id) {
-    var v = $('#lv'), cv = $('#lov'), tick = 0;
+    var v = $('#lv'), cv = $('#lov');
     while (S.live && S.loopId === id) {
       if (v.readyState >= 2 && v.videoWidth) {
         if (cv.width !== v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; }
@@ -799,8 +940,7 @@ function plainPosture(p) {
           var r = await detect(v);
           if (S.det) { S.ring.push({ t: (t0 + performance.now()) / 2, lm: r.poseLandmarks || null, slot: slot, seq: S.ringN }); if (S.ring.length > 12) S.ring.shift(); }
           drawPose(cv, r.poseLandmarks || null, cv.width, cv.height, null);
-          if (r.poseLandmarks) { if (tick++ % 4 === 0) renderLive(postureNow(r.poseLandmarks, $('#lbat').value)); }
-          else if (tick++ % 4 === 0) { $('#liveMetrics').innerHTML = ''; }
+          S.liveLm = r.poseLandmarks || null;
         } catch (e) { liveMsg('The tracker had a problem: ' + (e && e.message ? e.message : e), true); break; }
       }
       await new Promise(function (res) { requestAnimationFrame(res); });
@@ -840,17 +980,13 @@ function plainPosture(p) {
       cv.width = src.width; cv.height = src.height;
       cv.getContext('2d').drawImage(src, 0, 0);
       var ov = document.createElement('canvas'); ov.width = cv.width; ov.height = cv.height;
-      drawPose(ov, best.lm, ov.width, ov.height, null);
+      drawPose(ov, best.lm, ov.width, ov.height, null, angArg('L'));
       cv.getContext('2d').drawImage(ov, 0, 0);
       item.appendChild(cv);
     }
     var ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     line('Ping at ' + ts + ': ' + hzTxt(h.hz) + ' Hz, ' + h.db.toFixed(1) + ' dB');
     if (posture) {
-      var bits = [];
-      if (posture.knee !== undefined) bits.push('front knee ' + Math.round(posture.knee) + ' deg');
-      if (posture.lean !== undefined) bits.push('lean ' + Math.abs(Math.round(posture.lean)) + ' deg');
-      if (bits.length) line(bits.join(', '), 'mut');
       plainPosture(posture).forEach(function (t) { line(t); });
     } else line('I could not see your body at that moment.', 'mut');
     item.appendChild(txt);
@@ -887,7 +1023,7 @@ function plainPosture(p) {
     var v = $('#lv'); try { v.srcObject = null; } catch (e) {}
     var cv = $('#lov'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
     $('#liveGo').textContent = 'Start camera'; $('#liveGo').classList.remove('stop');
-    $('#liveMetrics').innerHTML = '';
+    S.liveLm = null;
   }
   $('#liveGo').addEventListener('click', function () { if (S.live) { stopLive(); liveMsg('Camera is off.', false); } else startLive(); });
   $('#liveFlip').addEventListener('click', function () {
@@ -896,6 +1032,7 @@ function plainPosture(p) {
   });
 
   /* ---------- start ---------- */
+  S.angles = !!LS.get('angles', false); syncAngles();
   renderHistory();
   if (typeof Pose === 'undefined') showErr($('#pageErr'), 'The body tracker files did not load. Check your internet and reload the page.');
   if ('serviceWorker' in navigator && location.protocol === 'https:') { navigator.serviceWorker.register('sw.js').catch(function () {}); }
