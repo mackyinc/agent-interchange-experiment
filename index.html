@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bat Ping Live</title>
+<style>
+/* Layout idea: one narrow column. Big Start/Stop on top, last hit as the headline number, averages under it, hit list at the bottom. */
+:root {
+  --bg: #f2f5f7;
+  --card: #ffffff;
+  --ink: #14202b;
+  --muted: #5b6b78;
+  --line: #d9e0e5;
+  --accent: #0b7a75;
+  --accent-ink: #ffffff;
+  --stop: #b42318;
+  --warn: #b45309;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f151b; --card: #17202a; --ink: #e8eef3; --muted: #94a5b3;
+    --line: #2a3744; --accent: #3cc4bb; --accent-ink: #06201e; --stop: #f97066; --warn: #f0a24a;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.45 var(--font-body); }
+main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; display: flex; flex-direction: column; gap: 14px; }
+h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
+.sub { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+h2 { font-size: 13px; margin: 0; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+label.lbl { font-size: 14px; font-weight: 500; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip, .btn { font: inherit; font-size: 15px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; padding: 9px 14px; cursor: pointer; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.ghost { color: var(--muted); }
+#go { width: 100%; min-height: 64px; font-size: 20px; font-weight: 700; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); border-radius: 10px; }
+#go.on { background: var(--stop); border-color: var(--stop); color: #fff; }
+.btn:focus-visible, .chip:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+input[type="text"] { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; min-height: 42px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.sens { display: flex; flex-direction: column; gap: 4px; }
+.hint, .sens small { color: var(--muted); font-size: 13px; }
+#status { font-size: 14px; min-height: 20px; color: var(--muted); }
+#status.err { color: var(--warn); }
+.meter { position: relative; height: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.meter .bar { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); }
+.meter .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warn); }
+.meterlbl { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.big { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.big .hz { font: 700 56px/1 var(--font-num); font-variant-numeric: tabular-nums; }
+.big .u { font-size: 18px; color: var(--muted); }
+.big .db { font: 600 24px/1 var(--font-num); margin-left: auto; font-variant-numeric: tabular-nums; }
+.big.flash .hz { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font: 600 22px/1.15 var(--font-num); font-variant-numeric: tabular-nums; }
+.tile .u { font-size: 12px; color: var(--muted); }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.group + .group { border-top: 1px solid var(--line); padding-top: 12px; }
+.group h3 { margin: 0; font-size: 16px; }
+.group .range { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; font-size: 15px; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+td.num { font-family: var(--font-num); }
+tr.off td { color: var(--muted); text-decoration: line-through; }
+td input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+#copybox { width: 100%; min-height: 110px; font: 13px/1.4 var(--font-num); background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bat Ping Live</h1>
+    <p class="sub">Press Start, hit the ball, press Stop. Each bat hit is caught on its own and logged with its peak pitch (Hz) and loudness (dB).</p>
+  </header>
+
+  <section class="card" aria-labelledby="h-listen">
+    <h2 id="h-listen">Listen</h2>
+    <label class="lbl" for="tag">What kind of swings are these?</label>
+    <div class="row" id="chips">
+      <button type="button" class="chip" data-v="Low power" aria-pressed="false">Low power</button>
+      <button type="button" class="chip" data-v="Medium" aria-pressed="false">Medium</button>
+      <button type="button" class="chip" data-v="Full power" aria-pressed="true">Full power</button>
+    </div>
+    <input id="tag" type="text" value="Full power" autocomplete="off">
+    <button type="button" class="btn" id="go">Start listening</button>
+    <div>
+      <div class="meter" aria-hidden="true"><div class="bar" id="bar"></div><div class="mark" id="mark"></div></div>
+      <div class="meterlbl"><span id="lvl">Level: off</span><span id="now">Right now: off</span></div>
+    </div>
+    <div class="sens">
+      <label class="lbl" for="sens">Hit detection: <span id="sensval">5</span> of 10</label>
+      <input id="sens" type="range" min="1" max="10" value="5">
+      <small>The orange line on the bar is the level a sound must pass to count as a hit. Raise this number if soft hits are missed. Lower it if noise counts as hits.</small>
+    </div>
+    <div id="status" role="status" aria-live="polite">Not listening. Put the phone near the plate and keep it in the same spot every time.</div>
+  </section>
+
+  <section class="card" aria-labelledby="h-last">
+    <h2 id="h-last">Last hit</h2>
+    <div class="big" id="big"><span class="hz" id="lastHz">--</span><span class="u">Hz</span><span class="db" id="lastDb">-- dB</span></div>
+  </section>
+
+  <section class="card" id="results" hidden aria-labelledby="h-res">
+    <h2 id="h-res">Averages</h2>
+    <div id="groups"></div>
+    <div class="row">
+      <button type="button" class="btn" id="copy">Copy results</button>
+      <button type="button" class="btn ghost" id="clear">Clear all</button>
+    </div>
+    <textarea id="copybox" hidden readonly aria-label="Results text"></textarea>
+  </section>
+
+  <section class="card" id="tablecard" hidden aria-labelledby="h-tab">
+    <h2 id="h-tab">All hits, newest first</h2>
+    <span class="hint">Untick a row to leave it out, for example a false trigger or a mishit.</span>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th><span class="sr">Include</span></th><th>#</th><th>Type</th><th>Hz</th><th>dB</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+/*CORE-START*/
+function fftInPlace(re, im) {
+  var n = re.length, i, j = 0, k, bit;
+  for (i = 1; i < n; i++) {
+    bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { var tr = re[i]; re[i] = re[j]; re[j] = tr; var ti = im[i]; im[i] = im[j]; im[j] = ti; }
+  }
+  for (var len = 2; len <= n; len <<= 1) {
+    var ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (i = 0; i < n; i += len) {
+      var cr = 1, ci = 0, half = len >> 1;
+      for (k = 0; k < half; k++) {
+        var a = i + k, b = a + half;
+        var xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi;
+        re[a] += xr; im[a] += xi;
+        var nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+}
+
+// Loudest pitch (Hz) between 300 and 12000 Hz in a short slice of audio.
+function peakHz(data, sr) {
+  var N = data.length, re = new Float64Array(N), im = new Float64Array(N);
+  for (var i = 0; i < N; i++) re[i] = data[i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
+  fftInPlace(re, im);
+  var binHz = sr / N;
+  var lo = Math.max(2, Math.ceil(300 / binHz));
+  var hi = Math.min(N / 2 - 2, Math.floor(12000 / binHz));
+  var best = lo, bestMag = -1, mags = new Float64Array(N / 2);
+  for (var k = lo - 1; k <= hi + 1; k++) mags[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+  for (k = lo; k <= hi; k++) if (mags[k] > bestMag) { bestMag = mags[k]; best = k; }
+  var a = Math.log(mags[best - 1] + 1e-12), b = Math.log(mags[best] + 1e-12), c = Math.log(mags[best + 1] + 1e-12);
+  var denom = a - 2 * b + c;
+  var delta = denom === 0 ? 0 : 0.5 * (a - c) / denom;
+  if (!isFinite(delta) || Math.abs(delta) > 1) delta = 0;
+  return (best + delta) * binHz;
+}
+
+// Feed it microphone blocks one after another. It returns a hit once it has heard enough of the ping to measure it.
+function Detector(sr, thrAbs) {
+  this.sr = sr; this.thrAbs = thrAbs;
+  this.cap = 65536; this.buf = new Float32Array(this.cap);
+  this.n = 0; this.floor = 0.002; this.pending = null; this.lockUntil = 0;
+  this.level = 0; this.thr = thrAbs; this.WIN = 4096; this.PRE = 64;
+}
+Detector.prototype.feed = function (block) {
+  var L = block.length, start = this.n, i, peak = 0, mask = this.cap - 1;
+  for (i = 0; i < L; i++) {
+    var v = block[i]; this.buf[(start + i) & mask] = v;
+    var a = v < 0 ? -v : v; if (a > peak) peak = a;
+  }
+  this.n += L; this.level = peak;
+  this.thr = Math.max(this.floor * 6, this.thrAbs);
+  if (!this.pending && start >= this.lockUntil && peak >= this.thr) {
+    var idx = 0;
+    for (i = 0; i < L; i++) { var w = block[i] < 0 ? -block[i] : block[i]; if (w >= this.thr) { idx = i; break; } }
+    this.pending = { onset: start + idx };
+  } else if (!this.pending && peak < this.thr) {
+    this.floor = this.floor * 0.98 + peak * 0.02;
+  }
+  var hits = [];
+  if (this.pending && this.n >= this.pending.onset + this.WIN) {
+    var s0 = this.pending.onset - this.PRE, slice = new Float32Array(this.WIN), top = 0;
+    for (i = 0; i < this.WIN; i++) {
+      var x = this.buf[(s0 + i) & mask]; slice[i] = x;
+      if (i >= this.PRE && i < this.PRE + Math.round(this.sr * 0.05)) { var ax = x < 0 ? -x : x; if (ax > top) top = ax; }
+    }
+    hits.push({ t: this.pending.onset / this.sr, hz: peakHz(slice, this.sr), db: 20 * Math.log10(Math.max(top, 1e-6)) });
+    this.lockUntil = this.pending.onset + Math.round(this.sr * 0.35);
+    this.pending = null;
+  }
+  return hits;
+};
+/*CORE-END*/
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var hits = [], det = null, ctx = null, stream = null, proc = null, ana = null, raf = 0, wake = null, listening = false;
+  function setStatus(msg, isErr) { var s = $("status"); s.textContent = msg; s.className = isErr ? "err" : ""; }
+  function mean(a) { var t = 0; for (var i = 0; i < a.length; i++) t += a[i]; return t / a.length; }
+  function fmtHz(v) { return Math.round(v).toLocaleString("en-US"); }
+  function fmtDb(v) { return v.toFixed(1); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function thrFromSens(s) { return 0.01 * Math.pow(30, (10 - s) / 9); }
+  function toPct(a) { var db = 20 * Math.log10(Math.max(a, 1e-6)); return Math.max(0, Math.min(100, (db + 70) / 70 * 100)); }
+
+  function renderGroups() {
+    var by = {}, order = [];
+    hits.forEach(function (h) { if (!h.on) return; if (!by[h.tag]) { by[h.tag] = []; order.push(h.tag); } by[h.tag].push(h); });
+    var html = "";
+    order.forEach(function (tag) {
+      var arr = by[tag], hz = arr.map(function (h) { return h.hz; }), db = arr.map(function (h) { return h.db; });
+      html += '<div class="group"><h3>' + esc(tag) + '</h3><div class="tiles">' +
+        '<div class="tile"><span class="k">Hits</span><span class="v">' + arr.length + '</span><span class="u">counted</span></div>' +
+        '<div class="tile"><span class="k">Avg peak pitch</span><span class="v">' + fmtHz(mean(hz)) + '</span><span class="u">Hz</span></div>' +
+        '<div class="tile"><span class="k">Avg loudness</span><span class="v">' + fmtDb(mean(db)) + '</span><span class="u">dB (0 is max)</span></div>' +
+        '</div><div class="range">Pitch ' + fmtHz(Math.min.apply(null, hz)) + " to " + fmtHz(Math.max.apply(null, hz)) +
+        " Hz. Loudness " + fmtDb(Math.min.apply(null, db)) + " to " + fmtDb(Math.max.apply(null, db)) + " dB.</div></div>";
+    });
+    $("groups").innerHTML = html || '<p class="hint">Every hit is unticked. Tick some rows below to see averages.</p>';
+  }
+  function renderRows() {
+    var html = "";
+    for (var i = hits.length - 1; i >= 0; i--) {
+      var h = hits[i];
+      html += '<tr class="' + (h.on ? "" : "off") + '"><td><input type="checkbox" data-i="' + i + '" aria-label="Include hit ' + (i + 1) + '"' + (h.on ? " checked" : "") + '></td>' +
+        '<td class="num">' + (i + 1) + "</td><td>" + esc(h.tag) + '</td><td class="num">' + fmtHz(h.hz) + '</td><td class="num">' + fmtDb(h.db) + "</td></tr>";
+    }
+    $("rows").innerHTML = html;
+  }
+  function render() {
+    var any = hits.length > 0;
+    $("results").hidden = !any; $("tablecard").hidden = !any;
+    if (any) { renderGroups(); renderRows(); }
+  }
+
+  function onHit(h) {
+    var tag = $("tag").value.trim() || "Untitled";
+    hits.push({ t: h.t, hz: h.hz, db: h.db, tag: tag, on: true });
+    $("lastHz").textContent = fmtHz(h.hz); $("lastDb").textContent = fmtDb(h.db) + " dB";
+    var big = $("big"); big.classList.add("flash"); setTimeout(function () { big.classList.remove("flash"); }, 500);
+    setStatus("Hit " + hits.length + " caught. Keep going or press Stop.", false);
+    render();
+  }
+
+  function frame() {
+    if (!listening) return;
+    $("bar").style.width = toPct(det.level) + "%";
+    $("mark").style.left = toPct(det.thr) + "%";
+    $("lvl").textContent = "Level: " + fmtDb(20 * Math.log10(Math.max(det.level, 1e-6))) + " dB";
+    var f = new Float32Array(ana.frequencyBinCount); ana.getFloatFrequencyData(f);
+    var binHz = ctx.sampleRate / ana.fftSize, lo = Math.ceil(300 / binHz), hi = Math.floor(12000 / binHz), best = lo;
+    for (var k = lo; k <= hi; k++) if (f[k] > f[best]) best = k;
+    $("now").textContent = det.level > 0.01 ? "Right now: " + fmtHz(best * binHz) + " Hz" : "Right now: quiet";
+    raf = requestAnimationFrame(frame);
+  }
+
+  function start() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus("This browser can't use the microphone here. Open the page with https in Chrome or Safari.", true); return; }
+    setStatus("Asking for the microphone ...", false);
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }).then(function (s) {
+      stream = s;
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      ctx = new Ctx(); if (ctx.resume) ctx.resume();
+      var src = ctx.createMediaStreamSource(stream);
+      det = new Detector(ctx.sampleRate, thrFromSens(parseInt($("sens").value, 10)));
+      ana = ctx.createAnalyser(); ana.fftSize = 4096; ana.smoothingTimeConstant = 0.3;
+      proc = ctx.createScriptProcessor(1024, 1, 1);
+      proc.onaudioprocess = function (e) {
+        var out = det.feed(e.inputBuffer.getChannelData(0));
+        for (var i = 0; i < out.length; i++) onHit(out[i]);
+      };
+      var mute = ctx.createGain(); mute.gain.value = 0;
+      src.connect(ana); src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+      listening = true;
+      $("go").textContent = "Stop listening"; $("go").classList.add("on");
+      setStatus("Listening. Hit the ball.", false);
+      try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (w) { wake = w; }, function () {}); } catch (e) {}
+      frame();
+    }, function () {
+      setStatus("The microphone was blocked. Allow it in the browser's site settings, then press Start again.", true);
+    });
+  }
+  function stop() {
+    listening = false; cancelAnimationFrame(raf);
+    try { if (proc) { proc.onaudioprocess = null; proc.disconnect(); } } catch (e) {}
+    try { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    try { if (ctx) ctx.close(); } catch (e) {}
+    try { if (wake) wake.release(); } catch (e) {}
+    proc = null; stream = null; ctx = null; wake = null;
+    $("go").textContent = "Start listening"; $("go").classList.remove("on");
+    $("bar").style.width = "0"; $("lvl").textContent = "Level: off"; $("now").textContent = "Right now: off";
+    setStatus(hits.length ? "Stopped. " + hits.length + " hit" + (hits.length === 1 ? "" : "s") + " logged." : "Stopped. No hits were caught. Try raising the detection number.", false);
+  }
+
+  $("go").addEventListener("click", function () { if (listening) stop(); else start(); });
+  $("sens").addEventListener("input", function (e) {
+    $("sensval").textContent = e.target.value;
+    if (det) { det.thrAbs = thrFromSens(parseInt(e.target.value, 10)); }
+    else $("mark").style.left = toPct(thrFromSens(parseInt(e.target.value, 10))) + "%";
+  });
+  $("mark").style.left = toPct(thrFromSens(5)) + "%";
+  function syncChips() {
+    var v = $("tag").value.trim();
+    Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (c) { c.setAttribute("aria-pressed", c.getAttribute("data-v") === v ? "true" : "false"); });
+  }
+  $("chips").addEventListener("click", function (e) { var b = e.target.closest(".chip"); if (!b) return; $("tag").value = b.getAttribute("data-v"); syncChips(); });
+  $("tag").addEventListener("input", syncChips);
+  $("rows").addEventListener("change", function (e) {
+    var i = e.target.getAttribute("data-i"); if (i === null) return;
+    hits[+i].on = e.target.checked; renderGroups(); renderRows();
+  });
+  $("clear").addEventListener("click", function () {
+    hits = []; render(); $("lastHz").textContent = "--"; $("lastDb").textContent = "-- dB"; $("copybox").hidden = true;
+    setStatus(listening ? "Cleared. Still listening." : "Cleared.", false);
+  });
+  $("copy").addEventListener("click", function () {
+    var by = {}, order = [];
+    hits.forEach(function (h) { if (!h.on) return; if (!by[h.tag]) { by[h.tag] = []; order.push(h.tag); } by[h.tag].push(h); });
+    var lines = ["Type, Hits, Avg Hz, Avg dB"];
+    order.forEach(function (tag) {
+      var a = by[tag];
+      lines.push(tag + ", " + a.length + ", " + fmtHz(mean(a.map(function (h) { return h.hz; }))) + ", " + fmtDb(mean(a.map(function (h) { return h.db; }))));
+    });
+    lines.push("", "Type, Hz, dB");
+    hits.forEach(function (h) { if (h.on) lines.push(h.tag + ", " + fmtHz(h.hz) + ", " + fmtDb(h.db)); });
+    var text = lines.join("\n"), box = $("copybox");
+    function showBox() { box.value = text; box.hidden = false; box.focus(); box.select(); setStatus("Press and hold the text to copy it.", false); }
+    try { navigator.clipboard.writeText(text).then(function () { setStatus("Results copied.", false); }, showBox); } catch (err) { showBox(); }
+  });
+  syncChips();
+})();
+</script>
+</body>
+</html>
