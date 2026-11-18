@@ -39,6 +39,8 @@ select, input[type=number] { width: 100%; font: inherit; padding: 10px; border-r
 .btn.small { min-height: 40px; font-size: 14px; padding: 8px 12px; width: auto; }
 .btn.stop { background: var(--bad); border-color: var(--bad); color: #2a0707; }
 button:focus-visible, select:focus-visible, input:focus-visible, label.btn:focus-within { outline: 3px solid var(--warn); outline-offset: 2px; }
+.chk { display: flex; gap: 10px; align-items: center; min-height: 44px; font-size: 15px; cursor: pointer; }
+.chk input { width: 22px; height: 22px; accent-color: var(--acc); flex: none; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .tabs { display: flex; gap: 8px; margin: 14px 0 6px; }
 .tabs button { flex: 1; min-height: 44px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font-family: inherit; font-weight: 600; font-size: 15px; cursor: pointer; }
@@ -102,6 +104,7 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
           <div><label class="k" for="fps">Video was filmed at</label>
             <select id="fps"><option value="30">30 frames/sec (normal)</option><option value="60">60 frames/sec</option></select></div>
         </div>
+        <label class="chk"><input type="checkbox" class="swingonly"> Swing only (do not use the ping)</label>
       </div>
 
       <label class="btn" for="fileRec">Record a swing</label>
@@ -180,9 +183,9 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
       <div class="row">
         <div><label class="k" for="lbat">I bat</label>
           <select id="lbat"><option value="R">Right-handed</option><option value="L">Left-handed</option></select></div>
-        <div><label class="k" for="lping">Listen for the ping</label>
-          <select id="lping"><option value="1">On (uses the microphone)</option><option value="0">Off</option></select></div>
       </div>
+      <label class="chk"><input type="checkbox" class="swingonly"> Swing only (no ping, no microphone)</label>
+      <label class="chk"><input type="checkbox" id="oneShot"> Stop after the first ping</label>
     </div>
     <div id="lstage">
       <video id="lv" muted playsinline></video>
@@ -193,6 +196,7 @@ input[type=range] { width: 100%; margin: 10px 0; accent-color: var(--acc); }
       <div><button type="button" class="btn sec" id="liveFlip">Flip camera</button></div>
     </div>
     <div id="liveStatus" class="mut" role="status" aria-live="polite" style="margin-top:8px">Camera is off. Set the phone down, step back until your whole body is in view, then press Start.</div>
+    <button type="button" class="btn sec small hide" id="relisten" style="margin-top:8px">Listen for the next ping</button>
     <div class="chips" style="margin-top:10px">
       <button type="button" class="angbtn" aria-pressed="false">Show angles on pictures</button>
       <button type="button" id="liveShot">Save screenshot</button>
@@ -342,8 +346,8 @@ function findPing(data, sr) {
 }
 
 // Live listening: feed it microphone blocks. It returns a hit once it has heard enough of the ping to measure it.
-function Detector(sr, thrAbs) {
-  this.sr = sr; this.thrAbs = thrAbs;
+function Detector(sr, thrAbs, lockSec) {
+  this.sr = sr; this.thrAbs = thrAbs; this.lockSec = lockSec || 0.35;
   this.cap = 65536; this.buf = new Float32Array(this.cap);
   this.n = 0; this.floor = 0.002; this.pending = null; this.lockUntil = 0;
   this.level = 0; this.thr = thrAbs; this.WIN = 4096;
@@ -367,7 +371,7 @@ Detector.prototype.feed = function (block) {
   if (this.pending && this.n >= this.pending.onset + this.WIN) {
     var st = pingStats(function (k) { return self.buf[k & mask]; }, this.pending.onset, this.sr);
     hits.push({ t: this.pending.onset / this.sr, hz: st.hz, db: st.db });
-    this.lockUntil = this.pending.onset + Math.round(this.sr * 0.35);
+    this.lockUntil = this.pending.onset + Math.round(this.sr * this.lockSec);
     this.pending = null;
   }
   return hits;
@@ -474,7 +478,7 @@ function postureNow(lm, bat) {
 
 /* ---------- plain English ---------- */
 // a: result of analyze. ping: {t, hz, db} or null. prev: the last saved swing {mph, pingDb} or null.
-function plainSummary(a, ping, prev, manual) {
+function plainSummary(a, ping, prev, manual, swingOnly) {
   var good = [], work = [], tips = [];
   if (a.hipToSh >= 20 && a.shToHand >= 0) good.push('Your hips started the swing, then your shoulders, then your hands. That is the right order.');
   else { work.push('Your hips and shoulders turned almost at the same time.'); tips.push('Start the swing by turning your belt buckle toward the pitcher. Let your hands come last.'); }
@@ -494,6 +498,7 @@ function plainSummary(a, ping, prev, manual) {
   var contact;
   if (ping && !manual) contact = 'Contact was heard at ' + ping.t.toFixed(2) + ' seconds. The ping was at ' + hzTxt(ping.hz) + ' Hz and measured ' + ping.db.toFixed(1) + ' dB. The closer to 0 dB, the louder it was.';
   else if (manual) contact = 'You picked the contact frame yourself, at ' + a.T[a.c].toFixed(2) + ' seconds.';
+  else if (swingOnly) contact = 'Swing-only mode. Contact is taken as the moment your hands were fastest, at ' + a.T[a.c].toFixed(2) + ' seconds.';
   else contact = 'I could not hear a clear ping in this video, so I used the moment your hands were fastest as contact. For the best result, keep the sound on and film close to the bat.';
 
   var compare = [];
@@ -528,7 +533,7 @@ function plainPosture(p) {
   var MAX_SEC = 10;
   var S = { pose: null, mode: '', last: null, busy: false, url: null, frames: null, an: null, fps: 30, W: 0, H: 0, idx: 0, timer: 0, sp: 0.5,
             live: false, facing: 'environment', stream: null, loopId: 0,
-            angles: false, liveLm: null, shotCanvas: null,
+            angles: false, swingOnly: false, pingOn: false, audioT0: null, liveLm: null, shotCanvas: null,
             ring: [], ringN: 0, pool: [], det: null, actx: null, proc: null, ping: null, manualT: null, prev: null };
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -761,7 +766,7 @@ function plainPosture(p) {
   // Reads the sound track of the video and looks for the bat's ping.
   async function readPing(file) {
     try {
-      if (file.size > 300 * 1024 * 1024) return null;
+      if (S.swingOnly || file.size > 300 * 1024 * 1024) return null;
       var buf = await file.arrayBuffer();
       var Ctx = window.AudioContext || window.webkitAudioContext;
       var ac = new Ctx();
@@ -803,7 +808,7 @@ function plainPosture(p) {
       }
       $('#pbar').style.width = '100%';
       S.frames = frames;
-      $('#pmsg').textContent = 'Listening for the ping...';
+      if (!S.swingOnly) $('#pmsg').textContent = 'Listening for the ping...';
       S.ping = await readPing(file); S.manualT = null;
       S.an = analyze(frames, S.W, S.H, $('#bat').value, parseFloat($('#hgt').value) || 170, S.ping ? S.ping.t : null);
       var h = LS.get('hist', []); S.prev = h.length ? h[h.length - 1] : null;
@@ -844,7 +849,7 @@ function plainPosture(p) {
   }
 
   function renderSummary() {
-    var r = plainSummary(S.an, S.ping, S.prev, !!S.manualT), box = $('#summary');
+    var r = plainSummary(S.an, S.ping, S.prev, !!S.manualT, S.swingOnly), box = $('#summary');
     box.innerHTML = '';
     function add(tag, text, cls) { var e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; box.appendChild(e); return e; }
     function list(title, items) {
@@ -946,26 +951,46 @@ function plainPosture(p) {
       await new Promise(function (res) { requestAnimationFrame(res); });
     }
   }
-  function startPingListener(stream) {
+  // Microphone blocks are read on the audio thread (AudioWorklet), so a busy body tracker cannot make it miss a ping.
+  function onAudioBlock(block, t) {
+    if (!S.det) return;
+    if (S.audioT0 === null) S.audioT0 = t - S.det.n / S.det.sr;
+    var out = S.det.feed(block);
+    if (!S.pingOn) return;
+    for (var i = 0; i < out.length; i++) onLivePing(out[i]);
+  }
+  async function startPingListener(stream) {
     try {
       var Ctx = window.AudioContext || window.webkitAudioContext;
       var ac = new Ctx(); if (ac.resume) ac.resume();
       var src = ac.createMediaStreamSource(stream);
-      S.det = new Detector(ac.sampleRate, 0.05);
-      var proc = ac.createScriptProcessor(1024, 1, 1);
-      proc.onaudioprocess = function (e) {
-        if (!S.det) return;
-        var out = S.det.feed(e.inputBuffer.getChannelData(0));
-        for (var i = 0; i < out.length; i++) onLivePing(out[i]);
-      };
+      S.det = new Detector(ac.sampleRate, 0.05, 2.0); S.pingOn = true; S.audioT0 = null; S.actx = ac;
+      var node;
+      if (ac.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+        var code = "class P extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(1024);this.n=0;this.t=0}" +
+          "process(i){var c=i[0]&&i[0][0];if(c){for(var k=0;k<c.length;k++){if(this.n===0)this.t=currentTime+k/sampleRate;this.b[this.n++]=c[k];" +
+          "if(this.n===1024){var o=this.b;this.port.postMessage({t:this.t,d:o},[o.buffer]);this.b=new Float32Array(1024);this.n=0;}}}return true}}" +
+          "registerProcessor('ping-tap',P);";
+        var url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+        await ac.audioWorklet.addModule(url); URL.revokeObjectURL(url);
+        node = new AudioWorkletNode(ac, 'ping-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        node.port.onmessage = function (e) { onAudioBlock(e.data.d, e.data.t); };
+      } else {
+        node = ac.createScriptProcessor(1024, 1, 1);
+        node.onaudioprocess = function (e) { onAudioBlock(new Float32Array(e.inputBuffer.getChannelData(0)), ac.currentTime); };
+      }
       var mute = ac.createGain(); mute.gain.value = 0;
-      src.connect(proc); proc.connect(mute); mute.connect(ac.destination);
-      S.actx = ac; S.proc = proc;
+      src.connect(node); node.connect(mute); mute.connect(ac.destination);
+      S.proc = node;
     } catch (e) { S.det = null; }
   }
   // Called about a tenth of a second after the ping. Looks back for the picture taken at the moment of the ping.
   function onLivePing(h) {
     var onsetWall = performance.now() - (S.det.n / S.det.sr - h.t) * 1000, best = null, bd = 1e9, i;
+    try {
+      var ts = S.actx && S.actx.getOutputTimestamp ? S.actx.getOutputTimestamp() : null;
+      if (ts && ts.performanceTime > 0 && ts.contextTime > 0 && S.audioT0 !== null) onsetWall = ts.performanceTime + (S.audioT0 + h.t - ts.contextTime) * 1000;
+    } catch (e) {}
     for (i = 0; i < S.ring.length; i++) {
       var e = S.ring[i], d = Math.abs(e.t - onsetWall);
       if (d < bd && S.ringN - e.seq < 12) { bd = d; best = e; }
@@ -992,16 +1017,35 @@ function plainPosture(p) {
     item.appendChild(txt);
     var list = $('#snapList'); list.insertBefore(item, list.firstChild);
     while (list.children.length > 4) list.removeChild(list.lastChild);
+    if ($('#oneShot').checked) {
+      S.pingOn = false; $('#relisten').classList.remove('hide');
+      liveMsg('Caught the ping. Tap "Listen for the next ping" when you are ready.', false);
+    }
   }
+  $('#relisten').addEventListener('click', function () {
+    if (!S.det) return;
+    S.det.pending = null; S.det.lockUntil = S.det.n + Math.round(S.det.sr * 0.5);
+    S.pingOn = true; $('#relisten').classList.add('hide');
+    liveMsg('Listening for the next ping.', false);
+  });
+  function syncSwingOnly() {
+    Array.prototype.forEach.call(document.querySelectorAll('.swingonly'), function (c) { c.checked = S.swingOnly; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.swingonly'), function (c) {
+    c.addEventListener('change', function () {
+      S.swingOnly = c.checked; LS.set('swingOnly', S.swingOnly); syncSwingOnly();
+      if (S.live) { stopLive(); startLive(); }
+    });
+  });
   async function startLive() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { liveMsg('This browser cannot use the camera here. Open the page in Safari or Chrome.', true); return; }
     liveMsg('Asking for the camera...', false);
     try {
-      var wantPing = $('#lping').value === '1';
+      var wantPing = !S.swingOnly;
       var stream = await navigator.mediaDevices.getUserMedia({ audio: wantPing ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false, video: { facingMode: { ideal: S.facing }, width: { ideal: 1280 }, height: { ideal: 720 } } });
       S.stream = stream;
       var v = $('#lv'); v.srcObject = stream; await v.play();
-      if (wantPing && stream.getAudioTracks().length) startPingListener(stream);
+      if (wantPing && stream.getAudioTracks().length) await startPingListener(stream);
       liveMsg('Loading the body tracker...', false);
       await getPose('live');
       S.live = true; S.loopId++;
@@ -1017,9 +1061,9 @@ function plainPosture(p) {
     S.live = false; S.loopId++;
     try { if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
     S.stream = null;
-    try { if (S.proc) { S.proc.onaudioprocess = null; S.proc.disconnect(); } } catch (e) {}
+    try { if (S.proc) { S.proc.onaudioprocess = null; if (S.proc.port) S.proc.port.onmessage = null; S.proc.disconnect(); } } catch (e) {}
     try { if (S.actx) S.actx.close(); } catch (e) {}
-    S.proc = null; S.actx = null; S.det = null; S.ring = [];
+    S.proc = null; S.actx = null; S.det = null; S.ring = []; S.pingOn = false; $('#relisten').classList.add('hide');
     var v = $('#lv'); try { v.srcObject = null; } catch (e) {}
     var cv = $('#lov'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
     $('#liveGo').textContent = 'Start camera'; $('#liveGo').classList.remove('stop');
@@ -1033,6 +1077,7 @@ function plainPosture(p) {
 
   /* ---------- start ---------- */
   S.angles = !!LS.get('angles', false); syncAngles();
+  S.swingOnly = !!LS.get('swingOnly', false); syncSwingOnly();
   renderHistory();
   if (typeof Pose === 'undefined') showErr($('#pageErr'), 'The body tracker files did not load. Check your internet and reload the page.');
   if ('serviceWorker' in navigator && location.protocol === 'https:') { navigator.serviceWorker.register('sw.js').catch(function () {}); }
